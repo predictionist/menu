@@ -1,12 +1,13 @@
--- Halloween UI Library (converted from RoadToGlory studio export)
--- Fixes applied:
---   * Dropdown option holder renders ABOVE all other widgets (high ZIndex)
---   * Section title centered horizontally
---   * Window title x-position aligned with the accent line below it
---   * Buttons have all 4 sides of UIStroke (bottom included)
---   * Sections centered vertically (proper padding)
+-- Halloween UI Library (polished: padding / spacing / strokes)
+-- Fixes:
+--   * Consistent internal padding (8px sections, 6px contents, 4px inter-element)
+--   * All strokes are full 4-sided (except intentional tab-merge on tab buttons)
+--   * Uniform gap between sections and between widgets
+--   * No 1px cut / overlap issues — every border drawn as 4 manual lines
+--   * Dropdown options render above other widgets (high ZIndex)
+--   * Section titles centered horizontally
+--   * Window title X aligns with accent line
 --   * Removed KeybindList + Watermark
---   * Removed Toggle:Colorpicker (use standalone Colorpicker)
 
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -22,7 +23,7 @@ local existing = GuiParent:FindFirstChild("menu")
 if existing then existing:Destroy() end
 
 -- ============================================================
--- LIBRARY TABLE
+-- LIBRARY
 -- ============================================================
 local Library = {
     Accent       = Color3.fromRGB(255, 119, 51),
@@ -34,31 +35,21 @@ local Library = {
     Risky        = Color3.fromRGB(255, 0, 0),
 
     FolderName   = "Celestial",
-
     Key          = Enum.KeyCode.End,
     Open         = true,
 
-    Tabs         = {},
-    RealTabs     = {},
-    Sections     = {},
-    Connections  = {},
-    Flags        = {},
-    Registry     = {},
-    RegistryMap  = {},
+    Tabs         = {}, RealTabs = {}, Sections = {},
+    Connections  = {}, Flags = {},
+    Registry     = {}, RegistryMap = {},
 
-    Holder             = nil,
-    MainFrame          = nil,
-    CurrentColorpicker = nil,
-    NotificationHolder = nil,
-    LoadedConfig       = nil,
-
-    Dragging = false,
+    Holder = nil, MainFrame = nil, CurrentColorpicker = nil,
+    NotificationHolder = nil, LoadedConfig = nil, Dragging = false,
 }
 
-Library.__index          = Library
-Library.Tabs             = {}
-Library.Tabs.__index     = Library.Tabs
-Library.Sections         = {}
+Library.__index = Library
+Library.Tabs = {}
+Library.Tabs.__index = Library.Tabs
+Library.Sections = {}
 Library.Sections.__index = Library.Sections
 
 -- ============================================================
@@ -84,12 +75,7 @@ do
         pcall(function()
             writefile(json, HttpService:JSONEncode({
                 name = "WindowsXPTahoma",
-                faces = {{
-                    name     = "WindowsXPTahoma",
-                    weight   = 400,
-                    style    = "Regular",
-                    assetId  = asset,
-                }},
+                faces = {{ name = "WindowsXPTahoma", weight = 400, style = "Regular", assetId = asset }},
             }))
         end)
         local ok2, f = pcall(function() return Font.new(getcustomasset(json)) end)
@@ -109,64 +95,49 @@ local function textStroke(obj)
     return s
 end
 
-local function doubleBorder(parent, colorKey)
+-- Full 4-sided double border made of manual 1px frame lines.
+-- Guarantees even rendering with no missing bottom/edges.
+local function fourSideBorder(parent, colorKey, zOffset)
     colorKey = colorKey or "Border"
+    zOffset = zOffset or 0
 
-    local outer = Instance.new("UIStroke")
-    outer.Color = Color3.fromRGB(0, 0, 0)
-    outer.Thickness = 1
-    outer.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    outer.LineJoinMode = Enum.LineJoinMode.Miter
-    outer.Parent = parent
+    local function line(pos, size, color)
+        local f = Instance.new("Frame")
+        f.BorderSizePixel = 0
+        f.Position = pos
+        f.Size = size
+        f.ZIndex = (parent.ZIndex or 1) + 1 + zOffset
+        f.BackgroundColor3 = color
+        f.Parent = parent
+        return f
+    end
 
-    local inner = Instance.new("UIStroke")
-    inner.Color = Library[colorKey]
-    inner.Thickness = 1
-    inner.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    inner.BorderStrokePosition = Enum.BorderStrokePosition.Inner
-    inner.LineJoinMode = Enum.LineJoinMode.Miter
-    inner.Parent = parent
+    -- Black outer (1px)
+    line(UDim2.new(0, 0, 0, 0),    UDim2.new(1, 0, 0, 1),  Color3.fromRGB(0, 0, 0))  -- top
+    line(UDim2.new(0, 0, 1, -1),   UDim2.new(1, 0, 0, 1),  Color3.fromRGB(0, 0, 0))  -- bottom
+    line(UDim2.new(0, 0, 0, 0),    UDim2.new(0, 1, 1, 0),  Color3.fromRGB(0, 0, 0))  -- left
+    line(UDim2.new(1, -1, 0, 0),   UDim2.new(0, 1, 1, 0),  Color3.fromRGB(0, 0, 0))  -- right
 
-    Library:AddToRegistry(inner, { Color = colorKey })
-    return outer, inner
+    -- Colored inner (1px, inset 1px)
+    local c = Library[colorKey]
+    local innerTop = line(UDim2.new(0, 1, 0, 1),   UDim2.new(1, -2, 0, 1), c)
+    local innerBot = line(UDim2.new(0, 1, 1, -2),  UDim2.new(1, -2, 0, 1), c)
+    local innerLft = line(UDim2.new(0, 1, 0, 1),   UDim2.new(0, 1, 1, -2), c)
+    local innerRgt = line(UDim2.new(1, -2, 0, 1),  UDim2.new(0, 1, 1, -2), c)
+    for _, f in {innerTop, innerBot, innerLft, innerRgt} do
+        Library:AddToRegistry(f, { BackgroundColor3 = colorKey })
+    end
 end
 
 local function glow(parent, colorKey)
     colorKey = colorKey or "Accent"
     local s = Instance.new("UIShadow")
-    s.BlurRadius = UDim.new(0, 20)
+    s.BlurRadius = UDim.new(0, 16)
     s.Color = Library[colorKey]
-    s.Spread = UDim2.new(0, 2, 0, 2)
+    s.Spread = UDim2.new(0, 1, 0, 1)
     s.Parent = parent
     Library:AddToRegistry(s, { Color = colorKey })
     return s
-end
-
-local function borderSides(parent, sides, colorKey)
-    colorKey = colorKey or "Border"
-    local function line(pos, size, z, isBlack)
-        local f = Instance.new("Frame")
-        f.BorderSizePixel = 0
-        f.Position = pos
-        f.Size = size
-        f.ZIndex = z
-        f.BackgroundColor3 = isBlack and Color3.fromRGB(0, 0, 0) or Library[colorKey]
-        f.Parent = parent
-        if not isBlack then
-            Library:AddToRegistry(f, { BackgroundColor3 = colorKey })
-        end
-        return f
-    end
-
-    local z = (parent.ZIndex or 1) + 1
-    if sides.top    then line(UDim2.new(0, 0, 0, 0),   UDim2.new(1, 0, 0, 1), z, true) end
-    if sides.bottom then line(UDim2.new(0, 0, 1, -1),  UDim2.new(1, 0, 0, 1), z, true) end
-    if sides.left   then line(UDim2.new(0, 0, 0, 0),   UDim2.new(0, 1, 1, 0), z, true) end
-    if sides.right  then line(UDim2.new(1, -1, 0, 0),  UDim2.new(0, 1, 1, 0), z, true) end
-    if sides.top    then line(UDim2.new(0, 1, 0, 1),   UDim2.new(1, -2, 0, 1), z) end
-    if sides.bottom then line(UDim2.new(0, 1, 1, -2),  UDim2.new(1, -2, 0, 1), z) end
-    if sides.left   then line(UDim2.new(0, 1, 0, 1),   UDim2.new(0, 1, 1, -2), z) end
-    if sides.right  then line(UDim2.new(1, -2, 0, 1),  UDim2.new(0, 1, 1, -2), z) end
 end
 
 local function makeLabel(parent, text, size, colorKey, xAlign, yAlign)
@@ -186,42 +157,23 @@ local function makeLabel(parent, text, size, colorKey, xAlign, yAlign)
 end
 
 local KEY_NAMES = {
-    [Enum.UserInputType.MouseButton1] = "MB1",
-    [Enum.UserInputType.MouseButton2] = "MB2",
-    [Enum.UserInputType.MouseButton3] = "MB3",
-    [Enum.UserInputType.MouseWheel]   = "MW",
-    [Enum.KeyCode.LeftShift]   = "LS",
-    [Enum.KeyCode.RightShift]  = "RS",
-    [Enum.KeyCode.LeftControl] = "LC",
-    [Enum.KeyCode.RightControl]= "RC",
-    [Enum.KeyCode.LeftAlt]     = "LA",
-    [Enum.KeyCode.RightAlt]    = "RA",
-    [Enum.KeyCode.CapsLock]    = "CAP",
-    [Enum.KeyCode.Backspace]   = "BKSP",
-    [Enum.KeyCode.Return]      = "ENT",
-    [Enum.KeyCode.Escape]      = "ESC",
-    [Enum.KeyCode.Space]       = "SPC",
-    [Enum.KeyCode.Up]          = "UP",
-    [Enum.KeyCode.Down]        = "DN",
-    [Enum.KeyCode.Left]        = "LT",
-    [Enum.KeyCode.Right]       = "RT",
-    [Enum.KeyCode.Insert]      = "INS",
-    [Enum.KeyCode.Delete]      = "DEL",
-    [Enum.KeyCode.Home]        = "HOM",
-    [Enum.KeyCode.End]         = "END",
-    [Enum.KeyCode.PageUp]      = "PGU",
-    [Enum.KeyCode.PageDown]    = "PGD",
-    [Enum.KeyCode.Tab]         = "TAB",
-    [Enum.KeyCode.One]         = "1",
-    [Enum.KeyCode.Two]         = "2",
-    [Enum.KeyCode.Three]       = "3",
-    [Enum.KeyCode.Four]        = "4",
-    [Enum.KeyCode.Five]        = "5",
-    [Enum.KeyCode.Six]         = "6",
-    [Enum.KeyCode.Seven]       = "7",
-    [Enum.KeyCode.Eight]       = "8",
-    [Enum.KeyCode.Nine]        = "9",
-    [Enum.KeyCode.Zero]        = "0",
+    [Enum.UserInputType.MouseButton1] = "MB1", [Enum.UserInputType.MouseButton2] = "MB2",
+    [Enum.UserInputType.MouseButton3] = "MB3", [Enum.UserInputType.MouseWheel]   = "MW",
+    [Enum.KeyCode.LeftShift] = "LS", [Enum.KeyCode.RightShift] = "RS",
+    [Enum.KeyCode.LeftControl] = "LC", [Enum.KeyCode.RightControl] = "RC",
+    [Enum.KeyCode.LeftAlt] = "LA", [Enum.KeyCode.RightAlt] = "RA",
+    [Enum.KeyCode.CapsLock] = "CAP", [Enum.KeyCode.Backspace] = "BKSP",
+    [Enum.KeyCode.Return] = "ENT", [Enum.KeyCode.Escape] = "ESC",
+    [Enum.KeyCode.Space] = "SPC", [Enum.KeyCode.Up] = "UP", [Enum.KeyCode.Down] = "DN",
+    [Enum.KeyCode.Left] = "LT", [Enum.KeyCode.Right] = "RT",
+    [Enum.KeyCode.Insert] = "INS", [Enum.KeyCode.Delete] = "DEL",
+    [Enum.KeyCode.Home] = "HOM", [Enum.KeyCode.End] = "END",
+    [Enum.KeyCode.PageUp] = "PGU", [Enum.KeyCode.PageDown] = "PGD",
+    [Enum.KeyCode.Tab] = "TAB",
+    [Enum.KeyCode.One] = "1", [Enum.KeyCode.Two] = "2", [Enum.KeyCode.Three] = "3",
+    [Enum.KeyCode.Four] = "4", [Enum.KeyCode.Five] = "5", [Enum.KeyCode.Six] = "6",
+    [Enum.KeyCode.Seven] = "7", [Enum.KeyCode.Eight] = "8", [Enum.KeyCode.Nine] = "9",
+    [Enum.KeyCode.Zero] = "0",
 }
 
 local function keyToString(k)
@@ -245,19 +197,12 @@ function Library:Connect(Signal, Callback)
     return c
 end
 
-function Library:Disconnect(Signal)
-    Signal:Disconnect()
-    table.remove(self.Connections, table.find(self.Connections, Signal))
-end
-
 function Library:SetOpen(Bool)
     if Library.MainFrame then Library.MainFrame.Visible = Bool end
     Library.Open = Bool
 end
 
-function Library:Round(Number, Float)
-    return Float * math.floor(Number / Float)
-end
+function Library:Round(Number, Float) return Float * math.floor(Number / Float) end
 
 function Library:AddToRegistry(Instance, Properties)
     local Data = { Instance = Instance, Properties = Properties, Idx = #Library.Registry + 1 }
@@ -300,31 +245,33 @@ function Library:Notify(Text, Duration, Color)
     if not Library.NotificationHolder then return end
     local box = Instance.new("Frame")
     box.Name = "notification"
-    box.Size = UDim2.new(0, 0, 0, 18)
+    box.Size = UDim2.new(0, 0, 0, 20)
     box.BorderSizePixel = 0
     box.BackgroundColor3 = Library.Background
     box.ClipsDescendants = true
     box.Parent = Library.NotificationHolder
-    doubleBorder(box, "Border")
+    fourSideBorder(box, "Border")
+    Library:AddToRegistry(box, { BackgroundColor3 = "Background" })
 
     local liner = Instance.new("Frame")
-    liner.Size = UDim2.new(0, 1, 1, 0)
+    liner.Size = UDim2.new(0, 2, 1, -2)
+    liner.Position = UDim2.new(0, 1, 0, 1)
     liner.BorderSizePixel = 0
     liner.BackgroundColor3 = Color or Library.Accent
     liner.Parent = box
 
     local lbl = makeLabel(box, Text, 11, "Text")
-    lbl.Position = UDim2.new(0, 7, 0, 0)
-    lbl.Size = UDim2.new(1, -10, 1, 0)
+    lbl.Position = UDim2.new(0, 8, 0, 0)
+    lbl.Size = UDim2.new(1, -12, 1, 0)
     lbl.TextTransparency = 1
 
     task.spawn(function()
-        local t1 = TweenService:Create(box, TweenInfo.new(0.26), { Size = UDim2.new(0, lbl.TextBounds.X + 14, 0, 18) })
+        local t1 = TweenService:Create(box, TweenInfo.new(0.26), { Size = UDim2.new(0, lbl.TextBounds.X + 16, 0, 20) })
         t1:Play(); t1.Completed:Wait()
         local t2 = TweenService:Create(lbl, TweenInfo.new(0.26), { TextTransparency = 0 })
         t2:Play(); t2.Completed:Wait()
         task.wait(Duration or 3)
-        local t3 = TweenService:Create(box, TweenInfo.new(0.26), { Size = UDim2.new(0, 0, 0, 18) })
+        local t3 = TweenService:Create(box, TweenInfo.new(0.26), { Size = UDim2.new(0, 0, 0, 20) })
         t3:Play(); t3.Completed:Wait()
         Library:RemoveFromRegistry(box)
         box:Destroy()
@@ -371,8 +318,6 @@ function Library:LoadConfig(Config)
                     ToLib:Set(Value, true)
                 elseif rawget(ToLib, "Color") then
                     ToLib:Set({ Color = Color3.new(Value.Color.R, Value.Color.G, Value.Color.B), Transparency = Value.Transparency })
-                elseif rawget(ToLib, "Value") and not rawget(ToLib, "Color") and not rawget(ToLib, "Key") then
-                    ToLib:Set(Value)
                 else
                     ToLib:Set(Value)
                 end
@@ -397,7 +342,6 @@ Screen.ResetOnSpawn = false
 Screen.IgnoreGuiInset = true
 Library.Holder = Screen
 
--- Menu key
 Library:Connect(UserInputService.InputBegan, function(input)
     if not Library.Key then return end
     if input.KeyCode == Library.Key then
@@ -415,53 +359,43 @@ function Library:Window(Data)
     Objects["main"] = Instance.new("Frame")
     Objects["main"].Name = "Holder"
     Objects["main"].Position = UDim2.new(0.5, -280, 0.5, -269)
-    Objects["main"].Size = UDim2.new(0, 561, 0, 538)
+    Objects["main"].Size = UDim2.new(0, 560, 0, 538)
     Objects["main"].BackgroundColor3 = Library.Inline
     Objects["main"].BorderSizePixel = 0
     Objects["main"].Parent = Library.Holder
-    doubleBorder(Objects["main"], "Border")
+    fourSideBorder(Objects["main"], "Border")
     Library:AddToRegistry(Objects["main"], { BackgroundColor3 = "Inline" })
     Library.MainFrame = Objects["main"]
 
-    -- Title (left-aligned so it starts at the same X as the accent line below)
+    -- Title row (title on left, game title on right) — both align with line below
+    local ROW_Y = 6
     Objects["title"] = makeLabel(Objects["main"], Window.Name, 14, "Accent")
-    Objects["title"].Position = UDim2.new(0, 8, 0, 4)
-    Objects["title"].Size = UDim2.new(0, 200, 0, 16)
+    Objects["title"].Position = UDim2.new(0, 8, 0, ROW_Y)
+    Objects["title"].Size = UDim2.new(0, 200, 0, 18)
 
-    -- Accent line under title (starts at X = 8 to match title)
+    Objects["gametitle"] = makeLabel(Objects["main"],
+        "[" .. tostring(game.GameId) .. "] " .. game.Name, 14, "TextInactive",
+        Enum.TextXAlignment.Right, Enum.TextYAlignment.Center)
+    Objects["gametitle"].Position = UDim2.new(1, -208, 0, ROW_Y)
+    Objects["gametitle"].Size = UDim2.new(0, 200, 0, 18)
+    Library:RemoveFromRegistry(Objects["gametitle"])
+    Library:AddToRegistry(Objects["gametitle"], { TextColor3 = "TextInactive" })
+
+    -- Accent divider
     Objects["line"] = Instance.new("Frame")
-    Objects["line"].Position = UDim2.new(0, 8, 0, 26)
-    Objects["line"].Size = UDim2.new(1, -16, 0, 2)
+    Objects["line"].Position = UDim2.new(0, 8, 0, ROW_Y + 22)
+    Objects["line"].Size = UDim2.new(1, -16, 0, 1)
     Objects["line"].BorderSizePixel = 0
     Objects["line"].BackgroundColor3 = Library.Accent
     Objects["line"].Parent = Objects["main"]
     Library:AddToRegistry(Objects["line"], { BackgroundColor3 = "Accent" })
     glow(Objects["line"], "Accent")
 
-    -- Game title (right side, aligned with line)
-    Objects["gametitle"] = makeLabel(Objects["main"], "[" .. tostring(game.GameId) .. "] " .. game.Name, 14, "TextInactive",
-        Enum.TextXAlignment.Right, Enum.TextYAlignment.Center)
-    Objects["gametitle"].Position = UDim2.new(1, -210, 0, 4)
-    Objects["gametitle"].Size = UDim2.new(0, 200, 0, 16)
-    Library:RemoveFromRegistry(Objects["gametitle"])
-    Library:AddToRegistry(Objects["gametitle"], { TextColor3 = "TextInactive" })
-
-    -- Tab holder (below the accent line)
-    Objects["tabholder"] = Instance.new("Frame")
-    Objects["tabholder"].Name = "Tab Holder"
-    Objects["tabholder"].Position = UDim2.new(0, 8, 0, 40)
-    Objects["tabholder"].Size = UDim2.new(1, -16, 1, -48)
-    Objects["tabholder"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
-    Objects["tabholder"].BorderSizePixel = 0
-    Objects["tabholder"].Parent = Objects["main"]
-    doubleBorder(Objects["tabholder"], "Border")
-    Library:AddToRegistry(Objects["tabholder"], { BackgroundColor3 = "Inline" })
-
-    -- Tab button row (sits above tabholder, visually overlapping)
+    -- Tab buttons sit ABOVE the tab-holder, X-aligned with the divider
     Objects["tabs"] = Instance.new("Frame")
     Objects["tabs"].Name = "Tabs"
-    Objects["tabs"].Position = UDim2.new(0, 8, 0, 12)
-    Objects["tabs"].Size = UDim2.new(1, -16, 0, 27)
+    Objects["tabs"].Position = UDim2.new(0, 8, 0, ROW_Y + 28)
+    Objects["tabs"].Size = UDim2.new(1, -16, 0, 26)
     Objects["tabs"].BackgroundTransparency = 1
     Objects["tabs"].ZIndex = 20
     Objects["tabs"].Parent = Objects["main"]
@@ -473,7 +407,19 @@ function Library:Window(Data)
     tl.VerticalAlignment = Enum.VerticalAlignment.Center
     tl.Parent = Objects["tabs"]
 
-    -- Tab content (scrolling)
+    -- Tab content holder (starts flush with the tab buttons' bottom)
+    local HOLDER_Y = ROW_Y + 28 + 26
+    Objects["tabholder"] = Instance.new("Frame")
+    Objects["tabholder"].Name = "Tab Holder"
+    Objects["tabholder"].Position = UDim2.new(0, 8, 0, HOLDER_Y)
+    Objects["tabholder"].Size = UDim2.new(1, -16, 1, -(HOLDER_Y + 8))
+    Objects["tabholder"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
+    Objects["tabholder"].BorderSizePixel = 0
+    Objects["tabholder"].Parent = Objects["main"]
+    fourSideBorder(Objects["tabholder"], "Border")
+    Library:AddToRegistry(Objects["tabholder"], { BackgroundColor3 = "Inline" })
+
+    -- Scrollable tab content (6px internal padding all around)
     Objects["content"] = Instance.new("ScrollingFrame")
     Objects["content"].Name = "Content"
     Objects["content"].Position = UDim2.new(0, 6, 0, 6)
@@ -535,18 +481,19 @@ function Library:Tab(Data)
     Objects["button"].FontFace = Fonts.Main
     Objects["button"].Text = " " .. Tab.Name .. " "
     Objects["button"].TextColor3 = Library.TextInactive
-    Objects["button"].TextSize = 14
+    Objects["button"].TextSize = 13
     Objects["button"].AutoButtonColor = false
-    Objects["button"].Size = UDim2.new(0, 80, 0, 27)
+    Objects["button"].Size = UDim2.new(0, 80, 0, 24)
     Objects["button"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
     Objects["button"].BorderSizePixel = 0
     Objects["button"].Name = Tab.Name
     Objects["button"].ZIndex = 20
     Objects["button"].Parent = Tab.Window.Objects.Tabs
-    borderSides(Objects["button"], { top = true, bottom = true, left = true, right = true }, "Border")
+    fourSideBorder(Objects["button"], "Border")
     Library:AddToRegistry(Objects["button"], { BackgroundColor3 = "Inline" })
     Library:AddToRegistry(Objects["button"], { TextColor3 = "TextInactive" })
 
+    -- Tab content: full-width column, 8px gap between L/R sides
     Objects["content"] = Instance.new("ScrollingFrame")
     Objects["content"].Name = Tab.Name
     Objects["content"].Size = UDim2.new(1, 0, 1, 0)
@@ -560,13 +507,13 @@ function Library:Tab(Data)
     Objects["content"].Parent = Tab.Window.Objects.Content
     Library:AddToRegistry(Objects["content"], { ScrollBarImageColor3 = "Accent" })
 
+    -- Two columns, each takes (1 - gap)/2 width
     Objects["left"] = Instance.new("Frame")
     Objects["left"].Name = "Left"
     Objects["left"].BackgroundTransparency = 1
     Objects["left"].Position = UDim2.new(0, 0, 0, 0)
     Objects["left"].Size = UDim2.new(0.5, -4, 1, 0)
     Objects["left"].Parent = Objects["content"]
-
     local ll = Instance.new("UIListLayout")
     ll.Padding = UDim.new(0, 8)
     ll.SortOrder = Enum.SortOrder.LayoutOrder
@@ -579,7 +526,6 @@ function Library:Tab(Data)
     Objects["right"].Position = UDim2.new(1, 0, 0, 0)
     Objects["right"].Size = UDim2.new(0.5, -4, 1, 0)
     Objects["right"].Parent = Objects["content"]
-
     local rl = Instance.new("UIListLayout")
     rl.Padding = UDim.new(0, 8)
     rl.SortOrder = Enum.SortOrder.LayoutOrder
@@ -592,7 +538,9 @@ function Library:Tab(Data)
         Objects["content"].Visible = Bool
         Library:RemoveFromRegistry(Objects["button"])
         Library:AddToRegistry(Objects["button"], { TextColor3 = Bool and "Accent" or "TextInactive" })
-        TweenService:Create(Objects["button"], TweenInfo.new(0.13), { TextColor3 = Bool and Library.Accent or Library.TextInactive }):Play()
+        TweenService:Create(Objects["button"], TweenInfo.new(0.13), {
+            TextColor3 = Bool and Library.Accent or Library.TextInactive,
+        }):Play()
     end
 
     Library:Connect(Objects["button"].MouseButton1Down, function()
@@ -608,7 +556,7 @@ function Library:Tab(Data)
 end
 
 -- ============================================================
--- SECTION
+-- SECTION  (centered title, proper vertical padding)
 -- ============================================================
 function Library.Tabs:Section(Data)
     local Section = { Tab = self, Name = Data.Name, Side = Data.Side or "Left", Objects = {} }
@@ -616,26 +564,28 @@ function Library.Tabs:Section(Data)
 
     Objects["section"] = Instance.new("Frame")
     Objects["section"].Name = "Section"
-    Objects["section"].Size = UDim2.new(1, 0, 0, 25)
+    Objects["section"].Size = UDim2.new(1, 0, 0, 20)
     Objects["section"].BorderSizePixel = 0
     Objects["section"].AutomaticSize = Enum.AutomaticSize.Y
     Objects["section"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
     Objects["section"].Parent = (Section.Side:lower() == "left" and Section.Tab.Objects.Left)
         or (Section.Side:lower() == "right" and Section.Tab.Objects.Right)
         or Section.Tab.Objects.Left
-    doubleBorder(Objects["section"], "Border")
+    fourSideBorder(Objects["section"], "Border")
     Library:AddToRegistry(Objects["section"], { BackgroundColor3 = "Inline" })
 
+    -- Accent line (top of section)
     Objects["liner"] = Instance.new("Frame")
     Objects["liner"].Name = "Section Line"
-    Objects["liner"].Size = UDim2.new(1, 0, 0, 1)
+    Objects["liner"].Size = UDim2.new(1, -2, 0, 1)
+    Objects["liner"].Position = UDim2.new(0, 1, 0, 1)
     Objects["liner"].BorderSizePixel = 0
     Objects["liner"].BackgroundColor3 = Library.Accent
     Objects["liner"].Parent = Objects["section"]
     Library:AddToRegistry(Objects["liner"], { BackgroundColor3 = "Accent" })
     glow(Objects["liner"], "Accent")
 
-    -- Section title: centered via AnchorPoint 0.5 / 0.5, positioned at top-center
+    -- Centered title sitting on the accent line
     Objects["text"] = Instance.new("TextLabel")
     Objects["text"].FontFace = Fonts.Main
     Objects["text"].Text = Section.Name
@@ -644,14 +594,15 @@ function Library.Tabs:Section(Data)
     Objects["text"].BackgroundColor3 = Library.Inline
     Objects["text"].BorderSizePixel = 0
     Objects["text"].AutomaticSize = Enum.AutomaticSize.X
-    Objects["text"].Size = UDim2.new(0, 50, 0, 13)
+    Objects["text"].Size = UDim2.new(0, 40, 0, 13)
     Objects["text"].AnchorPoint = Vector2.new(0.5, 0.5)
     Objects["text"].Position = UDim2.new(0.5, 0, 0, 0)
-    Objects["text"].ZIndex = 2
+    Objects["text"].ZIndex = 3
     Objects["text"].Parent = Objects["section"]
     textStroke(Objects["text"])
     Library:AddToRegistry(Objects["text"], { TextColor3 = "Text", BackgroundColor3 = "Inline" })
 
+    -- Content: 14px top gap (title height), 6px sides/bottom, 4px gap between widgets
     Objects["content"] = Instance.new("Frame")
     Objects["content"].Name = "Content"
     Objects["content"].BackgroundTransparency = 1
@@ -659,7 +610,6 @@ function Library.Tabs:Section(Data)
     Objects["content"].Size = UDim2.new(1, -12, 1, -20)
     Objects["content"].AutomaticSize = Enum.AutomaticSize.Y
     Objects["content"].Parent = Objects["section"]
-
     local cl = Instance.new("UIListLayout")
     cl.Padding = UDim.new(0, 6)
     cl.SortOrder = Enum.SortOrder.LayoutOrder
@@ -674,13 +624,9 @@ end
 -- ============================================================
 function Library.Sections:Toggle(Data)
     local Toggle = {
-        Section = self,
-        Name = Data.Name,
-        Flag = Data.Flag,
+        Section = self, Name = Data.Name, Flag = Data.Flag,
         Callback = Data.Callback or function() end,
-        State = Data.Default,
-        Value = false,
-        Risky = Data.Risky or false,
+        State = Data.Default, Value = false, Risky = Data.Risky or false,
     }
     local Objects = {}
 
@@ -696,16 +642,17 @@ function Library.Sections:Toggle(Data)
 
     Objects["indicator"] = Instance.new("Frame")
     Objects["indicator"].Name = "indicator"
-    Objects["indicator"].Size = UDim2.new(0, 16, 0, 16)
+    Objects["indicator"].Size = UDim2.new(0, 14, 0, 14)
+    Objects["indicator"].Position = UDim2.new(0, 0, 0, 1)
     Objects["indicator"].BorderSizePixel = 0
     Objects["indicator"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
     Objects["indicator"].Parent = Objects["toggle"]
-    doubleBorder(Objects["indicator"], "Border")
+    fourSideBorder(Objects["indicator"], "Border")
     Library:AddToRegistry(Objects["indicator"], { BackgroundColor3 = "Inline" })
 
     Objects["text"] = makeLabel(Objects["toggle"], Toggle.Name, 12, "Text")
-    Objects["text"].Position = UDim2.new(0, 24, 0, 0)
-    Objects["text"].Size = UDim2.new(1, -60, 1, 0)
+    Objects["text"].Position = UDim2.new(0, 22, 0, 0)
+    Objects["text"].Size = UDim2.new(1, -30, 1, 0)
     Objects["text"].TextTransparency = 0.4
 
     if Toggle.Risky then
@@ -729,18 +676,12 @@ function Library.Sections:Toggle(Data)
 
     Library:Connect(Objects["toggle"].MouseButton1Down, function() Toggle:Set(not Toggle.Value) end)
 
-    -- Chained keybind
     function Toggle:Keybind(Data)
         local Keybind = {
-            Section = self,
-            Name = Data.Name,
-            Flag = Data.Flag,
-            Mode = Data.Mode or "Toggle",
-            Value = false,
+            Section = self, Name = Data.Name, Flag = Data.Flag,
+            Mode = Data.Mode or "Toggle", Value = false,
             Callback = Data.Callback or function() end,
-            IsBeingSelected = false,
-            Default = Data.Default,
-            AbKey = "NONE",
+            IsBeingSelected = false, Default = Data.Default, AbKey = "NONE",
         }
         local Sub = {}
 
@@ -795,9 +736,7 @@ function Library.Sections:Toggle(Data)
                     Keybind:Set(Enum.UserInputType.MouseButton3, true)
                 elseif Input.UserInputType == Enum.UserInputType.MouseWheel then
                     Keybind:Set(Enum.UserInputType.MouseWheel, true)
-                else
-                    return
-                end
+                else return end
                 Keybind.IsBeingSelected = false
                 c:Disconnect()
             end)
@@ -838,7 +777,7 @@ function Library.Sections:Toggle(Data)
 end
 
 -- ============================================================
--- BUTTON (4-sided stroke including bottom)
+-- BUTTON (all-4-side stroke)
 -- ============================================================
 function Library.Sections:Button(Data)
     local Button = { Section = self, Name = Data.Name, Callback = Data.Callback or function() end }
@@ -848,11 +787,11 @@ function Library.Sections:Button(Data)
     Objects["button"].FontFace = Fonts.Main
     Objects["button"].Text = ""
     Objects["button"].AutoButtonColor = false
-    Objects["button"].Size = UDim2.new(1, 0, 0, 16)
+    Objects["button"].Size = UDim2.new(1, 0, 0, 18)
     Objects["button"].BorderSizePixel = 0
     Objects["button"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
     Objects["button"].Parent = Button.Section.Objects.Main
-    borderSides(Objects["button"], { top = true, bottom = true, left = true, right = true }, "Border")
+    fourSideBorder(Objects["button"], "Border")
     Library:AddToRegistry(Objects["button"], { BackgroundColor3 = "Inline" })
 
     Objects["text"] = makeLabel(Objects["button"], Button.Name, 12, "Text",
@@ -868,17 +807,17 @@ function Library.Sections:Button(Data)
 
     function Button:Sub(Data)
         local SubButton = { Name = Data.Name, Callback = Data.Callback or function() end }
-        Objects["button"].Size = UDim2.new(0.48, 0, 0, 16)
+        Objects["button"].Size = UDim2.new(0.5, -3, 0, 18)
 
         local s = Instance.new("TextButton")
         s.Text = ""
         s.AutoButtonColor = false
-        s.Position = UDim2.new(1, 5, 0, 0)
+        s.Position = UDim2.new(1, 6, 0, 0)
         s.Size = UDim2.new(1, 0, 1, 0)
         s.BorderSizePixel = 0
         s.BackgroundColor3 = Color3.fromRGB(23, 23, 23)
         s.Parent = Objects["button"]
-        borderSides(s, { top = true, bottom = true, left = true, right = true }, "Border")
+        fourSideBorder(s, "Border")
 
         local st = makeLabel(s, SubButton.Name, 12, "Text",
             Enum.TextXAlignment.Center, Enum.TextYAlignment.Center)
@@ -896,14 +835,9 @@ end
 -- ============================================================
 function Library.Sections:Slider(Data)
     local Slider = {
-        Section = self,
-        Name = Data.Name,
-        Min = Data.Min or 0,
-        Max = Data.Max or 100,
-        Suffix = Data.Sub or "",
-        State = Data.Default,
-        Flag = Data.Flag,
-        Value = 0,
+        Section = self, Name = Data.Name,
+        Min = Data.Min or 0, Max = Data.Max or 100, Suffix = Data.Sub or "",
+        State = Data.Default, Flag = Data.Flag, Value = 0,
         Decimals = Data.Decimals or 1,
         Callback = Data.Callback or function() end,
     }
@@ -926,11 +860,12 @@ function Library.Sections:Slider(Data)
     Objects["realslider"].Text = ""
     Objects["realslider"].AutoButtonColor = false
     Objects["realslider"].Parent = Objects["slider"]
-    borderSides(Objects["realslider"], { top = true, bottom = true, left = true, right = true }, "Border")
+    fourSideBorder(Objects["realslider"], "Border")
     Library:AddToRegistry(Objects["realslider"], { BackgroundColor3 = "Inline" })
 
     Objects["indicator"] = Instance.new("Frame")
-    Objects["indicator"].Size = UDim2.new(0, 0, 1, 0)
+    Objects["indicator"].Size = UDim2.new(0, 0, 1, -2)
+    Objects["indicator"].Position = UDim2.new(0, 1, 0, 1)
     Objects["indicator"].BorderSizePixel = 0
     Objects["indicator"].BackgroundColor3 = Library.Accent
     Objects["indicator"].Parent = Objects["realslider"]
@@ -943,7 +878,7 @@ function Library.Sections:Slider(Data)
     local function set(value)
         value = math.clamp(Library:Round(value, Slider.Decimals), Slider.Min, Slider.Max)
         local t = (value - Slider.Min) / (Slider.Max - Slider.Min)
-        Objects["indicator"].Size = UDim2.new(t, 0, 1, 0)
+        Objects["indicator"].Size = UDim2.new(t, -2 * t, 1, -2)
         Objects["value"].Text = string.format("%.14g", value) .. Slider.Suffix
         Slider.Value = value
         if Slider.Callback then Slider.Callback(value) end
@@ -977,17 +912,13 @@ function Library.Sections:Slider(Data)
 end
 
 -- ============================================================
--- DROPDOWN  (options render ABOVE all widgets via high ZIndex)
+-- DROPDOWN (options above all widgets)
 -- ============================================================
 function Library.Sections:Dropdown(Data)
     local Dropdown = {
-        Section = self,
-        Flag = Data.Flag,
-        Name = Data.Name or "Dropdown",
-        Default = Data.Default,
-        Options = {},
-        Callback = Data.Callback or function() end,
-        Value = nil,
+        Section = self, Flag = Data.Flag, Name = Data.Name or "Dropdown",
+        Default = Data.Default, Options = {},
+        Callback = Data.Callback or function() end, Value = nil,
     }
     local Objects = {}
 
@@ -1002,21 +933,21 @@ function Library.Sections:Dropdown(Data)
     Objects["realdropdown"] = Instance.new("Frame")
     Objects["realdropdown"].AnchorPoint = Vector2.new(0, 1)
     Objects["realdropdown"].Position = UDim2.new(0, 0, 1, 0)
-    Objects["realdropdown"].Size = UDim2.new(1, 0, 0, 15)
+    Objects["realdropdown"].Size = UDim2.new(1, 0, 0, 16)
     Objects["realdropdown"].BorderSizePixel = 0
     Objects["realdropdown"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
     Objects["realdropdown"].Parent = Objects["dropdown"]
-    borderSides(Objects["realdropdown"], { top = true, bottom = true, left = true, right = true }, "Border")
+    fourSideBorder(Objects["realdropdown"], "Border")
     Library:AddToRegistry(Objects["realdropdown"], { BackgroundColor3 = "Inline" })
 
     Objects["value"] = makeLabel(Objects["realdropdown"], "...", 12, "Text")
-    Objects["value"].Size = UDim2.new(1, -20, 1, 0)
-    Objects["value"].Position = UDim2.new(0, 5, 0, 0)
+    Objects["value"].Size = UDim2.new(1, -22, 1, 0)
+    Objects["value"].Position = UDim2.new(0, 6, 0, 0)
 
     Objects["open2"] = makeLabel(Objects["realdropdown"], "+", 12, "Text",
         Enum.TextXAlignment.Center, Enum.TextYAlignment.Center)
     Objects["open2"].AnchorPoint = Vector2.new(1, 0.5)
-    Objects["open2"].Position = UDim2.new(1, -2, 0.5, 0)
+    Objects["open2"].Position = UDim2.new(1, -4, 0.5, 0)
     Objects["open2"].Size = UDim2.new(0, 15, 1, 0)
 
     Objects["open1"] = Instance.new("TextButton")
@@ -1029,30 +960,28 @@ function Library.Sections:Dropdown(Data)
     Objects["optionholder"] = Instance.new("Frame")
     Objects["optionholder"].Visible = false
     Objects["optionholder"].Position = UDim2.new(0, 0, 1, 4)
-    Objects["optionholder"].Size = UDim2.new(1, 0, 0, 15)
+    Objects["optionholder"].Size = UDim2.new(1, 0, 0, 0)
     Objects["optionholder"].AutomaticSize = Enum.AutomaticSize.Y
     Objects["optionholder"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
     Objects["optionholder"].BorderSizePixel = 0
-    Objects["optionholder"].ZIndex = 500          -- <<< renders above all widgets
+    Objects["optionholder"].ZIndex = 500
+    Objects["optionholder"].ClipsDescendants = true
     Objects["optionholder"].Parent = Objects["dropdown"]
-    borderSides(Objects["optionholder"], { top = true, bottom = true, left = true, right = true }, "Border")
+    fourSideBorder(Objects["optionholder"], "Border")
     Library:AddToRegistry(Objects["optionholder"], { BackgroundColor3 = "Inline" })
 
     local ol = Instance.new("UIListLayout")
     ol.SortOrder = Enum.SortOrder.LayoutOrder
+    ol.Padding = UDim.new(0, 1)
     ol.Parent = Objects["optionholder"]
+    local op = Instance.new("UIPadding")
+    op.PaddingTop = UDim.new(0, 3)
+    op.PaddingBottom = UDim.new(0, 3)
+    op.Parent = Objects["optionholder"]
 
     function Dropdown:Toggle()
         Objects["optionholder"].Visible = not Objects["optionholder"].Visible
         Objects["open2"].Text = Objects["optionholder"].Visible and "-" or "+"
-        -- Bring to front: force higher ZIndex on all children
-        if Objects["optionholder"].Visible then
-            for _, d in Objects["optionholder"]:GetDescendants() do
-                if d:IsA("GuiObject") then
-                    d.ZIndex = math.max(d.ZIndex, 500)
-                end
-            end
-        end
     end
 
     Library:Connect(Objects["open1"].MouseButton1Down, function() Dropdown:Toggle() end)
@@ -1077,14 +1006,14 @@ function Library.Sections:Dropdown(Data)
         local ob = Instance.new("TextButton")
         ob.Text = ""
         ob.BackgroundTransparency = 1
-        ob.Size = UDim2.new(1, 0, 0, 15)
+        ob.Size = UDim2.new(1, 0, 0, 16)
         ob.AutoButtonColor = false
         ob.ZIndex = 501
         ob.Parent = Objects["optionholder"]
 
         local t = makeLabel(ob, Name, 12, "Text")
-        t.Position = UDim2.new(0, 5, 0, 0)
-        t.Size = UDim2.new(1, -5, 1, 0)
+        t.Position = UDim2.new(0, 6, 0, 0)
+        t.Size = UDim2.new(1, -6, 1, 0)
         t.ZIndex = 502
 
         local Option = { Name = Name, IsSelected = false, Text = t, Button = ob }
@@ -1112,15 +1041,10 @@ end
 -- ============================================================
 function Library.Sections:Keybind(Data)
     local Keybind = {
-        Section = self,
-        Name = Data.Name,
-        Flag = Data.Flag,
-        Mode = Data.Mode or "Toggle",
-        Value = false,
+        Section = self, Name = Data.Name, Flag = Data.Flag,
+        Mode = Data.Mode or "Toggle", Value = false,
         Callback = Data.Callback or function() end,
-        IsBeingSelected = false,
-        Default = Data.Default,
-        AbKey = "NONE",
+        IsBeingSelected = false, Default = Data.Default, AbKey = "NONE",
     }
     local Objects = {}
 
@@ -1183,9 +1107,7 @@ function Library.Sections:Keybind(Data)
                 Keybind:Set(Enum.UserInputType.MouseButton3, true)
             elseif Input.UserInputType == Enum.UserInputType.MouseWheel then
                 Keybind:Set(Enum.UserInputType.MouseWheel, true)
-            else
-                return
-            end
+            else return end
             Keybind.IsBeingSelected = false
             c:Disconnect()
         end)
@@ -1227,9 +1149,7 @@ end
 -- ============================================================
 function Library.Sections:Colorpicker(Data)
     local Colorpicker = {
-        Section = self,
-        Name = Data.Name,
-        Flag = Data.Flag,
+        Section = self, Name = Data.Name, Flag = Data.Flag,
         Default = Data.Default or Color3.fromRGB(255, 255, 255),
         Alpha = Data.Alpha or 0,
         Callback = Data.Callback or function() end,
@@ -1254,7 +1174,7 @@ function Library.Sections:Colorpicker(Data)
     Objects["button"].BorderSizePixel = 0
     Objects["button"].BackgroundColor3 = Colorpicker.Default
     Objects["button"].Parent = Objects["colorpicker"]
-    borderSides(Objects["button"], { top = true, bottom = true, left = true, right = true }, "Border")
+    fourSideBorder(Objects["button"], "Border")
 
     Objects["window"] = Instance.new("Frame")
     Objects["window"].Visible = false
@@ -1262,8 +1182,9 @@ function Library.Sections:Colorpicker(Data)
     Objects["window"].Size = UDim2.new(0, 200, 0, 165)
     Objects["window"].BorderSizePixel = 0
     Objects["window"].BackgroundColor3 = Library.Background
+    Objects["window"].ZIndex = 400
     Objects["window"].Parent = Library.MainFrame
-    doubleBorder(Objects["window"], "Border")
+    fourSideBorder(Objects["window"], "Border")
 
     Objects["palette"] = Instance.new("TextButton")
     Objects["palette"].Text = ""
@@ -1273,7 +1194,7 @@ function Library.Sections:Colorpicker(Data)
     Objects["palette"].BorderSizePixel = 0
     Objects["palette"].BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     Objects["palette"].Parent = Objects["window"]
-    doubleBorder(Objects["palette"], "Border")
+    fourSideBorder(Objects["palette"], "Border")
 
     Objects["sat"] = Instance.new("ImageLabel")
     Objects["sat"].BackgroundTransparency = 1
@@ -1302,7 +1223,7 @@ function Library.Sections:Colorpicker(Data)
     Objects["hue"].Size = UDim2.new(0, 17, 0, 150)
     Objects["hue"].BorderSizePixel = 0
     Objects["hue"].Parent = Objects["window"]
-    doubleBorder(Objects["hue"], "Border")
+    fourSideBorder(Objects["hue"], "Border")
 
     Objects["hdrag"] = Instance.new("Frame")
     Objects["hdrag"].Size = UDim2.new(1, 0, 0, 1)
@@ -1395,14 +1316,10 @@ end
 -- ============================================================
 function Library.Sections:Textbox(Data)
     local Textbox = {
-        Section = self,
-        Name = Data.Name,
-        Flag = Data.Flag,
-        Default = Data.Default,
-        Callback = Data.Callback or function() end,
+        Section = self, Name = Data.Name, Flag = Data.Flag,
+        Default = Data.Default, Callback = Data.Callback or function() end,
         Compact = Data.Compact or false,
-        Placeholder = Data.Placeholder or "",
-        Value = nil,
+        Placeholder = Data.Placeholder or "", Value = nil,
     }
     local Objects = {}
 
@@ -1417,11 +1334,11 @@ function Library.Sections:Textbox(Data)
     Objects["background"] = Instance.new("Frame")
     Objects["background"].AnchorPoint = Vector2.new(0, 1)
     Objects["background"].Position = UDim2.new(0, 0, 1, 0)
-    Objects["background"].Size = UDim2.new(1, 0, 0, 15)
+    Objects["background"].Size = UDim2.new(1, 0, 0, 16)
     Objects["background"].BorderSizePixel = 0
     Objects["background"].BackgroundColor3 = Color3.fromRGB(23, 23, 23)
     Objects["background"].Parent = Objects["textbox"]
-    borderSides(Objects["background"], { top = true, bottom = true, left = true, right = true }, "Border")
+    fourSideBorder(Objects["background"], "Border")
     Library:AddToRegistry(Objects["background"], { BackgroundColor3 = "Inline" })
 
     Objects["realbox"] = Instance.new("TextBox")
@@ -1433,8 +1350,8 @@ function Library.Sections:Textbox(Data)
     Objects["realbox"].TextColor3 = Library.Text
     Objects["realbox"].BackgroundTransparency = 1
     Objects["realbox"].TextXAlignment = Enum.TextXAlignment.Left
-    Objects["realbox"].Position = UDim2.new(0, 3, 0, 0)
-    Objects["realbox"].Size = UDim2.new(1, -6, 1, -1)
+    Objects["realbox"].Position = UDim2.new(0, 5, 0, 0)
+    Objects["realbox"].Size = UDim2.new(1, -10, 1, 0)
     Objects["realbox"].Parent = Objects["background"]
     textStroke(Objects["realbox"])
     Library:AddToRegistry(Objects["realbox"], { TextColor3 = "Text" })
@@ -1457,7 +1374,7 @@ function Library.Sections:Textbox(Data)
 
     if Textbox.Compact then
         Objects["text"]:Destroy()
-        Objects["textbox"].Size = UDim2.new(1, 0, 0, 15)
+        Objects["textbox"].Size = UDim2.new(1, 0, 0, 16)
     end
 
     if Textbox.Default then Textbox:Set(Textbox.Default) end
