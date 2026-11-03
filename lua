@@ -1,4 +1,4 @@
--- Halloween UI Library (dropdown fixed, layout polished, config listbox)
+-- Halloween UI Library (dropdown, slider, keybind, config, connections, colorpicker fixed)
 
 local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
@@ -185,6 +185,23 @@ function Library:Connect(Signal, Callback)
     return c
 end
 
+-- NEW: safe disconnect that also drops from the pool
+function Library:Cleanup(Connection)
+    if Connection then
+        pcall(function() Connection:Disconnect() end)
+        local i = table.find(self.Connections, Connection)
+        if i then table.remove(self.Connections, i) end
+    end
+end
+
+function Library:Destroy()
+    for _, c in ipairs(self.Connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    table.clear(self.Connections)
+    if self.Holder then self.Holder:Destroy() end
+end
+
 function Library:SetOpen(Bool)
     if Library.MainFrame then Library.MainFrame.Visible = Bool end
     Library.Open = Bool
@@ -268,52 +285,105 @@ function Library:Notify(Text, Duration, Color)
     end)
 end
 
+-- ============================================================
+-- CONFIG (fixed serialization)
+-- ============================================================
 function Library:GetConfig()
     local Config = {}
-    for Index, Value in self.Flags do
+    for Index, Value in pairs(self.Flags) do
         if typeof(Value) == "table" then
-            if Value.Value ~= nil then
-                Config[Index] = Value.Value
-            elseif Value.Color then
-                Config[Index] = { Color = { R = Value.Color.R, G = Value.Color.G, B = Value.Color.B }, Transparency = Value.Transparency }
-            elseif rawget(Value, "Key") and rawget(Value, "Name") then
-                Config[Index] = { Name = Value.Key.Name }
-            else
-                Config[Index] = Value.Value
+            if rawget(Value, "Color") then
+                -- colorpicker
+                Config[Index] = {
+                    Type = "color",
+                    Color = { R = Value.Color.R, G = Value.Color.G, B = Value.Color.B },
+                    Transparency = Value.Transparency or 0,
+                }
+            elseif rawget(Value, "Key") and rawget(Value, "AbKey") then
+                -- keybind / toggle-keybind
+                Config[Index] = {
+                    Type = "keybind",
+                    Key = Value.Key and Value.Key.Name or nil,
+                    AbKey = Value.AbKey or "NONE",
+                }
+            elseif rawget(Value, "Value") ~= nil then
+                -- toggle / slider / dropdown / textbox / listbox
+                Config[Index] = {
+                    Type = "value",
+                    Value = Value.Value,
+                }
             end
         end
     end
-    return Config, HttpService:JSONEncode(Config)
+    local ok, encoded = pcall(function() return HttpService:JSONEncode(Config) end)
+    return Config, ok and encoded or "{}"
 end
 
 function Library:SaveConfig(ConfigName)
-    local _, Encoded = Library:GetConfig()
-    if ConfigName and type(ConfigName) == "string" then
-        writefile(Library.FolderName .. "/Configs/" .. ConfigName .. ".json", Encoded)
+    if not ConfigName or type(ConfigName) ~= "string" or ConfigName == "" then
+        Library:Notify("Invalid config name", 3, Color3.fromRGB(255, 0, 0))
+        return false
     end
+    local _, Encoded = Library:GetConfig()
+    local ok = pcall(function()
+        writefile(Library.FolderName .. "/Configs/" .. ConfigName .. ".json", Encoded)
+    end)
+    if not ok then
+        Library:Notify("Save failed", 3, Color3.fromRGB(255, 0, 0))
+    end
+    return ok
 end
 
 function Library:LoadConfig(Config)
-    if not Config then
-        Library:Notify("Config not found", 3, Color3.fromRGB(255, 0, 0))
-        return
+    if not Config or Config == "" then
+        Library:Notify("Config empty", 3, Color3.fromRGB(255, 0, 0))
+        return false
     end
-    local Decoded = HttpService:JSONDecode(Config)
-    for Index, Value in Decoded do
+    local ok, Decoded = pcall(function() return HttpService:JSONDecode(Config) end)
+    if not ok or type(Decoded) ~= "table" then
+        Library:Notify("Invalid config", 3, Color3.fromRGB(255, 0, 0))
+        return false
+    end
+
+    for Index, Value in pairs(Decoded) do
         task.spawn(function()
             local ToLib = Library.Flags[Index]
             if not ToLib then return end
             pcall(function()
-                if rawget(ToLib, "Key") and type(Value) ~= "boolean" then
-                    ToLib:Set(Value, true)
-                elseif rawget(ToLib, "Color") then
-                    ToLib:Set({ Color = Color3.new(Value.Color.R, Value.Color.G, Value.Color.B), Transparency = Value.Transparency })
+                -- New typed format
+                if type(Value) == "table" and Value.Type then
+                    if Value.Type == "color" then
+                        ToLib:Set({
+                            Color = Color3.new(Value.Color.R, Value.Color.G, Value.Color.B),
+                            Transparency = Value.Transparency or 0,
+                        })
+                    elseif Value.Type == "keybind" then
+                        if Value.Key then
+                            local kc = Enum.KeyCode[Value.Key]
+                            if kc then ToLib:Set(kc) end
+                        end
+                    elseif Value.Type == "value" then
+                        ToLib:Set(Value.Value)
+                    end
                 else
-                    ToLib:Set(Value)
+                    -- Legacy fallback
+                    if rawget(ToLib, "Key") then
+                        ToLib:Set(Value, true)
+                    elseif rawget(ToLib, "Color") then
+                        if Value.Color then
+                            ToLib:Set({
+                                Color = Color3.new(Value.Color.R, Value.Color.G, Value.Color.B),
+                                Transparency = Value.Transparency or 0,
+                            })
+                        end
+                    else
+                        ToLib:Set(Value)
+                    end
                 end
             end)
         end)
     end
+    return true
 end
 
 function Library:DeleteConfig(ConfigName)
@@ -560,7 +630,7 @@ function Library:Tab(Data)
 end
 
 -- ============================================================
--- SECTION (title left-aligned, extra top clearance)
+-- SECTION
 -- ============================================================
 function Library.Tabs:Section(Data)
     local Section = { Tab = self, Name = Data.Name, Side = Data.Side or "Left", Objects = {} }
@@ -590,7 +660,6 @@ function Library.Tabs:Section(Data)
     Library:AddToRegistry(Objects["liner"], { BackgroundColor3 = "Accent" })
     glow(Objects["liner"], "Accent")
 
-    -- Title: left-aligned, straddles the accent line
     Objects["text"] = Instance.new("TextLabel")
     Objects["text"].FontFace = Fonts.Main
     Objects["text"].Text = Section.Name
@@ -608,7 +677,6 @@ function Library.Tabs:Section(Data)
     textStroke(Objects["text"])
     Library:AddToRegistry(Objects["text"], { TextColor3 = "Text", BackgroundColor3 = "Panel" })
 
-    -- Content: pushed further down so title has breathing room
     Objects["content"] = Instance.new("Frame")
     Objects["content"].Name = "Content"
     Objects["content"].BackgroundTransparency = 1
@@ -740,7 +808,7 @@ function Library.Sections:Toggle(Data)
             Sub["key"].Text = "[...]"
             local c
             c = Library:Connect(UserInputService.InputBegan, function(Input)
-                if not Keybind.IsBeingSelected then c:Disconnect(); return end
+                if not Keybind.IsBeingSelected then Library:Cleanup(c); return end
                 if Input.UserInputType == Enum.UserInputType.Keyboard then
                     Keybind:Set(Input.KeyCode)
                 elseif Input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -753,7 +821,7 @@ function Library.Sections:Toggle(Data)
                     Keybind:Set(Enum.UserInputType.MouseWheel, true)
                 else return end
                 Keybind.IsBeingSelected = false
-                c:Disconnect()
+                Library:Cleanup(c)
             end)
         end)
 
@@ -848,7 +916,7 @@ function Library.Sections:Button(Data)
 end
 
 -- ============================================================
--- SLIDER
+-- SLIDER (fixed division by zero when Min == Max)
 -- ============================================================
 function Library.Sections:Slider(Data)
     local Slider = {
@@ -858,6 +926,10 @@ function Library.Sections:Slider(Data)
         Decimals = Data.Decimals or 1,
         Callback = Data.Callback or function() end,
     }
+    -- Guard: if Min >= Max, force max up
+    if Slider.Max <= Slider.Min then Slider.Max = Slider.Min + 1 end
+    if Slider.Decimals <= 0 then Slider.Decimals = 1 end
+
     local Objects = {}
 
     Objects["slider"] = Instance.new("Frame")
@@ -895,9 +967,17 @@ function Library.Sections:Slider(Data)
         Enum.TextXAlignment.Center, Enum.TextYAlignment.Center, 8)
     Objects["value"].Size = UDim2.new(1, 0, 1, 0)
 
+    local function clampValue(v)
+        local span = Slider.Max - Slider.Min
+        if span <= 0 then return Slider.Min end
+        local r = Library:Round(v, Slider.Decimals)
+        return math.clamp(r, Slider.Min, Slider.Max)
+    end
+
     local function set(value)
-        value = math.clamp(Library:Round(value, Slider.Decimals), Slider.Min, Slider.Max)
-        local t = (value - Slider.Min) / (Slider.Max - Slider.Min)
+        value = clampValue(value)
+        local span = Slider.Max - Slider.Min
+        local t = span > 0 and (value - Slider.Min) / span or 0
         Objects["indicator"].Size = UDim2.new(t, -2 * t, 1, -2)
         Objects["value"].Text = string.format("%.14g", value) .. Slider.Suffix
         Slider.Value = value
@@ -910,7 +990,10 @@ function Library.Sections:Slider(Data)
 
     local sliding = false
     local function inputSlide(input)
-        local rel = (input.Position.X - Objects["realslider"].AbsolutePosition.X) / Objects["realslider"].AbsoluteSize.X
+        local sizeX = Objects["realslider"].AbsoluteSize.X
+        if sizeX <= 0 then return end
+        local rel = (input.Position.X - Objects["realslider"].AbsolutePosition.X) / sizeX
+        rel = math.clamp(rel, 0, 1)
         set(Slider.Min + (Slider.Max - Slider.Min) * rel)
     end
 
@@ -932,15 +1015,20 @@ function Library.Sections:Slider(Data)
 end
 
 -- ============================================================
--- DROPDOWN  (original working logic — no auto-size / no clip bugs)
+-- DROPDOWN (rendering + clipping fixed)
 -- ============================================================
 function Library.Sections:Dropdown(Data)
     local Dropdown = {
         Section = self, Flag = Data.Flag, Name = Data.Name or "Dropdown",
-        Default = Data.Default, Options = {},
+        Default = Data.Default, Options = {}, OptionOrder = {},
         Callback = Data.Callback or function() end, Value = nil,
     }
     local Objects = {}
+
+    local ROW_HEIGHT = 16
+    local PAD_TOP = 3
+    local PAD_BOT = 3
+    local GAP = 1
 
     Objects["dropdown"] = Instance.new("Frame")
     Objects["dropdown"].BackgroundTransparency = 1
@@ -980,33 +1068,33 @@ function Library.Sections:Dropdown(Data)
     Objects["open1"].ZIndex = 8
     Objects["open1"].Parent = Objects["realdropdown"]
 
-    -- Option holder: manual height, no auto-size, no clipping
+    -- Option list rendered above everything (ZIndex 200+)
     Objects["optionholder"] = Instance.new("Frame")
     Objects["optionholder"].Visible = false
     Objects["optionholder"].Position = UDim2.new(0, 0, 1, 2)
     Objects["optionholder"].Size = UDim2.new(1, 0, 0, 0)
     Objects["optionholder"].BackgroundColor3 = Library.Panel
     Objects["optionholder"].BorderSizePixel = 0
-    Objects["optionholder"].ZIndex = 50
+    Objects["optionholder"].ClipsDescendants = false
+    Objects["optionholder"].ZIndex = 200
     Objects["optionholder"].Parent = Objects["dropdown"]
-    fourSideBorder(Objects["optionholder"], "Border", 51)
+    fourSideBorder(Objects["optionholder"], "Border", 201)
     Library:AddToRegistry(Objects["optionholder"], { BackgroundColor3 = "Panel" })
 
     local ol = Instance.new("UIListLayout")
     ol.SortOrder = Enum.SortOrder.LayoutOrder
-    ol.Padding = UDim.new(0, 1)
+    ol.Padding = UDim.new(0, GAP)
     ol.Parent = Objects["optionholder"]
+
     local op = Instance.new("UIPadding")
-    op.PaddingTop = UDim.new(0, 3)
-    op.PaddingBottom = UDim.new(0, 3)
+    op.PaddingTop = UDim.new(0, PAD_TOP)
+    op.PaddingBottom = UDim.new(0, PAD_BOT)
     op.Parent = Objects["optionholder"]
 
     local function recalcSize()
-        local count = 0
-        for _, c in ipairs(Objects["optionholder"]:GetChildren()) do
-            if c:IsA("GuiObject") then count += 1 end
-        end
-        Objects["optionholder"].Size = UDim2.new(1, 0, 0, count * 16 + (count - 1) + 6)
+        local count = #Dropdown.OptionOrder
+        local h = PAD_TOP + PAD_BOT + count * ROW_HEIGHT + math.max(0, count - 1) * GAP
+        Objects["optionholder"].Size = UDim2.new(1, 0, 0, h)
     end
 
     function Dropdown:Toggle()
@@ -1014,15 +1102,12 @@ function Library.Sections:Dropdown(Data)
         Objects["open2"].Text = Objects["optionholder"].Visible and "-" or "+"
         if Objects["optionholder"].Visible then
             recalcSize()
-            for _, d in Objects["optionholder"]:GetDescendants() do
-                if d:IsA("GuiObject") then
-                    d.ZIndex = math.max(d.ZIndex, 52)
-                end
-            end
         end
     end
 
-    Library:Connect(Objects["open1"].MouseButton1Down, function() Dropdown:Toggle() end)
+    Library:Connect(Objects["open1"].MouseButton1Down, function()
+        Dropdown:Toggle()
+    end)
 
     function Dropdown:Set(Value)
         if Dropdown.Options[Value] then
@@ -1041,21 +1126,26 @@ function Library.Sections:Dropdown(Data)
     function Dropdown:SetVisibility(b) Objects["dropdown"].Visible = b end
 
     function Dropdown:AddOption(Name)
+        if Dropdown.Options[Name] then return Dropdown.Options[Name] end
+        local order = #Dropdown.OptionOrder + 1
+
         local ob = Instance.new("TextButton")
         ob.Text = ""
         ob.BackgroundTransparency = 1
-        ob.Size = UDim2.new(1, 0, 0, 16)
+        ob.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
         ob.AutoButtonColor = false
-        ob.ZIndex = 52
+        ob.LayoutOrder = order
+        ob.ZIndex = 202
         ob.Parent = Objects["optionholder"]
 
-        local t = makeLabel(ob, Name, 12, "Text", nil, nil, 53)
+        local t = makeLabel(ob, Name, 12, "Text", nil, nil, 203)
         t.Position = UDim2.new(0, 6, 0, 0)
         t.Size = UDim2.new(1, -6, 1, 0)
 
         local Option = { Name = Name, IsSelected = false, Text = t, Button = ob }
         Library:Connect(ob.MouseButton1Down, function() Dropdown:Set(Name) end)
         Dropdown.Options[Name] = Option
+        Dropdown.OptionOrder[order] = Name
         recalcSize()
         return Option
     end
@@ -1064,19 +1154,31 @@ function Library.Sections:Dropdown(Data)
         if Dropdown.Options[Name] then
             Dropdown.Options[Name].Button:Destroy()
             Dropdown.Options[Name] = nil
+            for i, n in ipairs(Dropdown.OptionOrder) do
+                if n == Name then
+                    table.remove(Dropdown.OptionOrder, i)
+                    break
+                end
+            end
+            -- Reapply layout order
+            for i, n in ipairs(Dropdown.OptionOrder) do
+                local opt = Dropdown.Options[n]
+                if opt then opt.Button.LayoutOrder = i end
+            end
             recalcSize()
         end
     end
 
     for _, v in ipairs(Data.Options) do Dropdown:AddOption(v) end
     Dropdown:Set(Dropdown.Default or Data.Options[1])
+    recalcSize()
 
     Library.Flags[Dropdown.Flag] = Dropdown
     return Dropdown
 end
 
 -- ============================================================
--- KEYBIND
+-- KEYBIND (defaults applied correctly)
 -- ============================================================
 function Library.Sections:Keybind(Data)
     local Keybind = {
@@ -1137,7 +1239,7 @@ function Library.Sections:Keybind(Data)
         Objects["key"].Text = "[...]"
         local c
         c = Library:Connect(UserInputService.InputBegan, function(Input)
-            if not Keybind.IsBeingSelected then c:Disconnect(); return end
+            if not Keybind.IsBeingSelected then Library:Cleanup(c); return end
             if Input.UserInputType == Enum.UserInputType.Keyboard then
                 Keybind:Set(Input.KeyCode)
             elseif Input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1150,7 +1252,7 @@ function Library.Sections:Keybind(Data)
                 Keybind:Set(Enum.UserInputType.MouseWheel, true)
             else return end
             Keybind.IsBeingSelected = false
-            c:Disconnect()
+            Library:Cleanup(c)
         end)
     end)
 
@@ -1186,7 +1288,7 @@ function Library.Sections:Keybind(Data)
 end
 
 -- ============================================================
--- COLORPICKER (button slightly longer for better look)
+-- COLORPICKER (positioning fixed - clamps to screen)
 -- ============================================================
 function Library.Sections:Colorpicker(Data)
     local Colorpicker = {
@@ -1212,7 +1314,7 @@ function Library.Sections:Colorpicker(Data)
     Objects["button"].AutoButtonColor = false
     Objects["button"].AnchorPoint = Vector2.new(1, 0.5)
     Objects["button"].Position = UDim2.new(1, 0, 0.5, 0)
-    Objects["button"].Size = UDim2.new(0, 28, 0, 14)   -- slightly longer
+    Objects["button"].Size = UDim2.new(0, 28, 0, 14)
     Objects["button"].BorderSizePixel = 0
     Objects["button"].ZIndex = 5
     Objects["button"].BackgroundColor3 = Colorpicker.Default
@@ -1221,13 +1323,12 @@ function Library.Sections:Colorpicker(Data)
 
     Objects["window"] = Instance.new("Frame")
     Objects["window"].Visible = false
-    Objects["window"].Position = UDim2.new(1, 7, 0, 0)
     Objects["window"].Size = UDim2.new(0, 200, 0, 165)
     Objects["window"].BorderSizePixel = 0
-    Objects["window"].ZIndex = 200
+    Objects["window"].ZIndex = 300
     Objects["window"].BackgroundColor3 = Library.Background
     Objects["window"].Parent = Library.MainFrame
-    fourSideBorder(Objects["window"], "Border", 201)
+    fourSideBorder(Objects["window"], "Border", 301)
 
     Objects["palette"] = Instance.new("TextButton")
     Objects["palette"].Text = ""
@@ -1235,29 +1336,29 @@ function Library.Sections:Colorpicker(Data)
     Objects["palette"].Position = UDim2.new(0, 6, 0, 7)
     Objects["palette"].Size = UDim2.new(0, 160, 0, 150)
     Objects["palette"].BorderSizePixel = 0
-    Objects["palette"].ZIndex = 201
+    Objects["palette"].ZIndex = 301
     Objects["palette"].BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     Objects["palette"].Parent = Objects["window"]
-    fourSideBorder(Objects["palette"], "Border", 202)
+    fourSideBorder(Objects["palette"], "Border", 302)
 
     Objects["sat"] = Instance.new("ImageLabel")
     Objects["sat"].BackgroundTransparency = 1
     Objects["sat"].Size = UDim2.new(1, 0, 1, 0)
-    Objects["sat"].ZIndex = 202
+    Objects["sat"].ZIndex = 302
     Objects["sat"].Image = "rbxassetid://130624743341203"
     Objects["sat"].Parent = Objects["palette"]
 
     Objects["val"] = Instance.new("ImageLabel")
     Objects["val"].BackgroundTransparency = 1
     Objects["val"].Size = UDim2.new(1, 0, 1, 0)
-    Objects["val"].ZIndex = 203
+    Objects["val"].ZIndex = 303
     Objects["val"].Image = "rbxassetid://96192970265863"
     Objects["val"].Parent = Objects["palette"]
 
     Objects["pdrag"] = Instance.new("Frame")
     Objects["pdrag"].Size = UDim2.new(0, 3, 0, 3)
     Objects["pdrag"].AnchorPoint = Vector2.new(0.5, 0.5)
-    Objects["pdrag"].ZIndex = 204
+    Objects["pdrag"].ZIndex = 304
     Objects["pdrag"].BackgroundColor3 = Color3.new(1, 1, 1)
     Objects["pdrag"].Parent = Objects["palette"]
     local pds = Instance.new("UIStroke"); pds.Color = Color3.new(0, 0, 0); pds.Parent = Objects["pdrag"]
@@ -1269,13 +1370,13 @@ function Library.Sections:Colorpicker(Data)
     Objects["hue"].Position = UDim2.new(1, -8, 0, 7)
     Objects["hue"].Size = UDim2.new(0, 17, 0, 150)
     Objects["hue"].BorderSizePixel = 0
-    Objects["hue"].ZIndex = 201
+    Objects["hue"].ZIndex = 301
     Objects["hue"].Parent = Objects["window"]
-    fourSideBorder(Objects["hue"], "Border", 202)
+    fourSideBorder(Objects["hue"], "Border", 302)
 
     Objects["hdrag"] = Instance.new("Frame")
     Objects["hdrag"].Size = UDim2.new(1, 0, 0, 1)
-    Objects["hdrag"].ZIndex = 204
+    Objects["hdrag"].ZIndex = 304
     Objects["hdrag"].BackgroundColor3 = Color3.new(1, 1, 1)
     Objects["hdrag"].Parent = Objects["hue"]
     local hds = Instance.new("UIStroke"); hds.Color = Color3.new(0, 0, 0); hds.Parent = Objects["hdrag"]
@@ -1303,6 +1404,32 @@ function Library.Sections:Colorpicker(Data)
 
     function Picker:Get() return getColor() end
     function Colorpicker:Close() Objects["window"].Visible = false; Picker.IsOpen = false end
+
+    -- NEW: clamp window to screen
+    local function positionWindow()
+        local btnAbs = Objects["button"].AbsolutePosition
+        local btnSize = Objects["button"].AbsoluteSize
+        local winSize = Objects["window"].AbsoluteSize
+        if winSize.X == 0 then winSize = Vector2.new(200, 165) end
+        local winAbs = Objects["window"].AbsolutePosition
+        local mainAbs = Library.MainFrame.AbsolutePosition
+        local mainSize = Library.MainFrame.AbsoluteSize
+        if mainSize.X == 0 then mainSize = Vector2.new(560, 538) end
+
+        local px = btnAbs.X - mainAbs.X + btnSize.X - winSize.X
+        local py = btnAbs.Y - mainAbs.Y + btnSize.Y + 4
+
+        if px < 4 then px = 4 end
+        if px + winSize.X > mainSize.X - 4 then
+            px = mainSize.X - winSize.X - 4
+        end
+        if py + winSize.Y > mainSize.Y - 4 then
+            py = btnAbs.Y - mainAbs.Y - winSize.Y - 4
+        end
+        if py < 4 then py = 4 end
+        Objects["window"].Position = UDim2.fromOffset(px, py)
+    end
+
     function Colorpicker:Toggle()
         Picker.IsOpen = not Picker.IsOpen
         if Picker.IsOpen then
@@ -1311,6 +1438,7 @@ function Library.Sections:Colorpicker(Data)
             end
             Library.CurrentColorpicker = Colorpicker
             Objects["window"].Visible = true
+            task.defer(positionWindow)
         else
             Objects["window"].Visible = false
         end
@@ -1333,7 +1461,9 @@ function Library.Sections:Colorpicker(Data)
         local rc
         rc = Library:Connect(UserInputService.InputEnded, function(i)
             if i.UserInputType == Enum.UserInputType.MouseButton1 then
-                mc:Disconnect(); rc:Disconnect(); upd()
+                Library:Cleanup(mc)
+                Library:Cleanup(rc)
+                upd()
             end
         end)
     end)
@@ -1350,7 +1480,9 @@ function Library.Sections:Colorpicker(Data)
         local rc
         rc = Library:Connect(UserInputService.InputEnded, function(i)
             if i.UserInputType == Enum.UserInputType.MouseButton1 then
-                mc:Disconnect(); rc:Disconnect(); upd()
+                Library:Cleanup(mc)
+                Library:Cleanup(rc)
+                upd()
             end
         end)
     end)
@@ -1435,7 +1567,7 @@ function Library.Sections:Textbox(Data)
 end
 
 -- ============================================================
--- CONFIG LISTBOX (shows all saved configs)
+-- CONFIG LISTBOX
 -- ============================================================
 function Library.Sections:ConfigListbox(Data)
     local ConfigBox = { Section = self, Flag = Data.Flag, Callback = Data.Callback or function() end, Selected = nil }
@@ -1471,7 +1603,7 @@ function Library.Sections:ConfigListbox(Data)
 
     local function refresh()
         for _, c in ipairs(Objects["scroll"]:GetChildren()) do
-            if c:IsA("TextButton") then c:Destroy() end
+            if c:IsA("TextButton") or c:IsA("TextLabel") then c:Destroy() end
         end
         local configs = Library:ListConfigs()
         if #configs == 0 then
